@@ -377,7 +377,7 @@ fn write_status_line(writer: &mut impl Write, line: &str, final_line: bool) -> i
     if final_line {
         writeln!(writer, "{line}")
     } else {
-        write!(writer, "\r\x1b[2K{line}")?;
+        write!(writer, "\x1b[1G\x1b[2K{line}")?;
         writer.flush()
     }
 }
