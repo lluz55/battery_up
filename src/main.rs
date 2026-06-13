@@ -77,6 +77,7 @@ fn run_watch(args: &Args) -> Result<(), String> {
     let mut counted = Duration::ZERO;
     let mut last_tick = Instant::now();
     let mut stdout = io::stdout();
+    let mut rendered = false;
 
     while !STOP.load(Ordering::SeqCst) {
         let now = Instant::now();
@@ -88,16 +89,14 @@ fn run_watch(args: &Args) -> Result<(), String> {
             counted += elapsed;
         }
 
-        print_snapshot_to(&mut stdout, &snapshot, counted, args.json, false)
+        print_snapshot_to(&mut stdout, &snapshot, counted, args.json, false, rendered)
             .map_err(|err| err.to_string())?;
+        rendered = true;
         thread::sleep(args.interval);
     }
 
     let snapshot = read_power_snapshot(&args.sysfs_root).map_err(|err| err.to_string())?;
-    if !args.json {
-        writeln!(stdout).map_err(|err| err.to_string())?;
-    }
-    print_snapshot_to(&mut stdout, &snapshot, counted, args.json, true)
+    print_snapshot_to(&mut stdout, &snapshot, counted, args.json, true, rendered)
         .map_err(|err| err.to_string())?;
     Ok(())
 }
@@ -305,7 +304,7 @@ fn print_snapshot(
     final_line: bool,
 ) -> io::Result<()> {
     let mut stdout = io::stdout();
-    print_snapshot_to(&mut stdout, snapshot, counted, json, final_line)
+    print_snapshot_to(&mut stdout, snapshot, counted, json, final_line, false)
 }
 
 fn print_snapshot_to(
@@ -314,10 +313,10 @@ fn print_snapshot_to(
     counted: Duration,
     json: bool,
     final_line: bool,
+    redraw_previous: bool,
 ) -> io::Result<()> {
     if json {
-        writeln!(
-            writer,
+        let line = format!(
             "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"final\":{}}}",
             snapshot.state_label(),
             snapshot.on_battery_only,
@@ -325,25 +324,18 @@ fn print_snapshot_to(
             counted.as_secs(),
             format_duration(counted.as_secs()),
             final_line
-        )
-    } else if final_line {
-        for line in format_snapshot_lines(snapshot, counted) {
-            writeln!(writer, "{line}")?;
+        );
+        if final_line && redraw_previous {
+            write!(writer, "\x1b[1G\x1b[2K")?;
         }
-        Ok(())
+        write_status_line(writer, &line, final_line)
     } else {
-        write!(
+        write_status_block(
             writer,
-            "\r{}  {} {}  {} {}  {} {}",
-            color_bold("battery-up"),
-            color_bold(&format_duration(counted.as_secs())),
-            color_muted("elapsed"),
-            state_badge(snapshot.state_label(), snapshot.on_battery_only),
-            color_muted("power"),
-            capacity_meter(snapshot.battery_capacity),
-            color_muted("charge")
-        )?;
-        writer.flush()
+            &format_snapshot_lines(snapshot, counted),
+            redraw_previous,
+            final_line,
+        )
     }
 }
 
