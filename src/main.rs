@@ -154,6 +154,7 @@ fn run_live_status(args: &Args) -> Result<(), String> {
     install_signal_handlers();
 
     let mut stdout = io::stdout();
+    let mut rendered = false;
     while !STOP.load(Ordering::SeqCst) {
         let state = read_battery_state(&args.state_file).map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => format!(
@@ -162,7 +163,9 @@ fn run_live_status(args: &Args) -> Result<(), String> {
             ),
             _ => err.to_string(),
         })?;
-        print_state_to(&mut stdout, &state, args.json, false).map_err(|err| err.to_string())?;
+        print_live_state_to(&mut stdout, &state, args.json, rendered)
+            .map_err(|err| err.to_string())?;
+        rendered = true;
         thread::sleep(args.interval);
     }
 
@@ -366,10 +369,21 @@ fn print_state_to(
 ) -> io::Result<()> {
     if json {
         write_status_line(writer, &format_state_json(state), final_line)
-    } else if final_line {
-        write_status_line(writer, &format_state(state), true)
     } else {
-        write_status_line(writer, &format_state(state), false)
+        write_status_block(writer, &format_state_lines(state), false, final_line)
+    }
+}
+
+fn print_live_state_to(
+    writer: &mut impl Write,
+    state: &BatteryState,
+    json: bool,
+    redraw_previous: bool,
+) -> io::Result<()> {
+    if json {
+        write_status_line(writer, &format_state_json(state), false)
+    } else {
+        write_status_block(writer, &format_state_lines(state), redraw_previous, false)
     }
 }
 
@@ -380,6 +394,30 @@ fn write_status_line(writer: &mut impl Write, line: &str, final_line: bool) -> i
         write!(writer, "\x1b[1G\x1b[2K{line}")?;
         writer.flush()
     }
+}
+
+fn write_status_block(
+    writer: &mut impl Write,
+    lines: &[String],
+    redraw_previous: bool,
+    final_block: bool,
+) -> io::Result<()> {
+    if redraw_previous && lines.len() > 1 {
+        write!(writer, "\x1b[{}A", lines.len() - 1)?;
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        if final_block {
+            write!(writer, "{line}")?;
+        } else {
+            write!(writer, "\x1b[1G\x1b[2K{line}")?;
+        }
+        if index + 1 < lines.len() || final_block {
+            writeln!(writer)?;
+        }
+    }
+
+    writer.flush()
 }
 
 fn format_state_json(state: &BatteryState) -> String {
@@ -397,16 +435,21 @@ fn format_state_json(state: &BatteryState) -> String {
     )
 }
 
-fn format_state(state: &BatteryState) -> String {
-    format!(
-        "total: {} | state: {} | battery: {} | last charged: {} | drain/min: {} | updated_at_unix: {}",
-        format_duration(state.counted_seconds),
-        color_state(state.state_label(), state.on_battery_only),
-        color_capacity(state.battery_capacity),
-        color_capacity(state.last_charged_capacity),
-        color_drain(drain_per_minute(state)),
-        state.updated_at_unix
-    )
+fn format_state_lines(state: &BatteryState) -> Vec<String> {
+    vec![
+        format!("total: {}", format_duration(state.counted_seconds)),
+        format!(
+            "state: {}",
+            color_state(state.state_label(), state.on_battery_only)
+        ),
+        format!("battery: {}", color_capacity(state.battery_capacity)),
+        format!(
+            "last charged: {}",
+            color_capacity(state.last_charged_capacity)
+        ),
+        format!("drain/min: {}", color_drain(drain_per_minute(state))),
+        format!("updated_at_unix: {}", state.updated_at_unix),
+    ]
 }
 
 fn format_duration(total: u64) -> String {
