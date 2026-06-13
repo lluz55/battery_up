@@ -34,7 +34,27 @@
             pname = "battery-up";
             version = "0.1.0";
             inherit src;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoHash = "sha256-3TJSuQNjIKQo7M69LR0cOvnTKTX4W2qZimyC11Hmh/E=";
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+            ];
+            buildInputs = with pkgs; [
+              dbus.dev
+              glib
+              libglvnd
+              libxkbcommon
+              wayland
+            ];
+            runtimeDependencies = with pkgs; [
+              libglvnd
+              wayland
+            ];
+            postInstall = ''
+              install -Dm0644 data/applications/dev.lluz.BatteryUpApplet.desktop \
+                $out/share/applications/dev.lluz.BatteryUpApplet.desktop
+              install -Dm0644 data/icons/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg \
+                $out/share/icons/hicolor/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg
+            '';
           };
         });
 
@@ -42,6 +62,7 @@
         default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/battery-up";
+          meta.description = "Measure notebook time running only on battery";
         };
       });
 
@@ -96,8 +117,19 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.cargo
+              pkgs.dbus.dev
+              pkgs.glib
+              pkgs.libglvnd
+              pkgs.libxkbcommon
+              pkgs.pkg-config
               pkgs.rustc
               pkgs.rustfmt
+              pkgs.wayland
+            ];
+
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.libglvnd
+              pkgs.wayland
             ];
           };
         });
