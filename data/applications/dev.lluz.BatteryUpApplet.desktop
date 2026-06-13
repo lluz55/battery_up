@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Battery Up
+Comment=Display notebook time running only on battery
+Type=Application
+Exec=cosmic-applet-battery-up
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Battery;Power;Runtime;
+Icon=dev.lluz.BatteryUpApplet-symbolic
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-HostWaylandDisplay=true
+X-CosmicHoverPopup=Auto

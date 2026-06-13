@@ -101,6 +101,21 @@ Após aplicar a configuração, consulte com:
 nix run . -- status
 ```
 
+### Applet para COSMIC
+
+O pacote também instala o applet `cosmic-applet-battery-up`, registrado pelo
+arquivo desktop `dev.lluz.BatteryUpApplet.desktop` com `X-CosmicApplet=true`.
+No COSMIC, depois de instalar o pacote no sistema, ele aparece como `Battery Up`
+na lista de applets que podem ser adicionados ao painel/barra.
+
+O applet usa o arquivo de estado do daemon (`/var/lib/battery-up/state`) e mostra
+o tempo acumulado com um ícone simbólico de bateria. Para usar outro arquivo de
+estado durante testes:
+
+```sh
+BATTERY_UP_STATE_FILE=/tmp/battery-up-state cosmic-applet-battery-up
+```
+
 ## Desenvolvimento
 
 Entre no ambiente de desenvolvimento definido pelo `flake.nix`:

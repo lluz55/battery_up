@@ -94,6 +94,9 @@ fn run_watch(args: &Args) -> Result<(), String> {
     }
 
     let snapshot = read_power_snapshot(&args.sysfs_root).map_err(|err| err.to_string())?;
+    if !args.json {
+        writeln!(stdout).map_err(|err| err.to_string())?;
+    }
     print_snapshot_to(&mut stdout, &snapshot, counted, args.json, true)
         .map_err(|err| err.to_string())?;
     Ok(())
@@ -290,22 +293,9 @@ fn install_signal_handlers() {
 }
 
 fn print_help() {
-    println!(
-        "Usage: battery-up [COMMAND] [OPTIONS]\n\n\
-         Commands:\n\
-           watch      Measure only while this command is running (default)\n\
-           daemon     Persist accumulated battery-only time for systemd\n\
-           status     Print the persisted daemon total\n\
-           reset      Reset the persisted daemon total to zero\n\n\
-         Options:\n\
-           --interval <seconds>  Refresh interval, defaults to 1\n\
-           --once                With watch, print current power state and exit\n\
-           --live                With status, refresh from the daemon state file\n\
-           --json                Print JSON output\n\
-           --state-file <path>   State file, defaults to /var/lib/battery-up/state\n\
-           --sysfs-root <path>   Override power_supply root for tests/debug\n\
-           -h, --help            Show this help"
-    );
+    for line in help_lines() {
+        println!("{line}");
+    }
 }
 
 fn print_snapshot(
@@ -337,20 +327,21 @@ fn print_snapshot_to(
             final_line
         )
     } else if final_line {
-        writeln!(
-            writer,
-            "\nfinal: {} | state: {} | battery: {}",
-            format_duration(counted.as_secs()),
-            color_state(snapshot.state_label(), snapshot.on_battery_only),
-            color_capacity(snapshot.battery_capacity)
-        )
+        for line in format_snapshot_lines(snapshot, counted) {
+            writeln!(writer, "{line}")?;
+        }
+        Ok(())
     } else {
         write!(
             writer,
-            "\rtime on battery: {} | state: {} | battery: {}",
-            format_duration(counted.as_secs()),
-            color_state(snapshot.state_label(), snapshot.on_battery_only),
-            color_capacity(snapshot.battery_capacity)
+            "\r{}  {} {}  {} {}  {} {}",
+            color_bold("battery-up"),
+            color_bold(&format_duration(counted.as_secs())),
+            color_muted("elapsed"),
+            state_badge(snapshot.state_label(), snapshot.on_battery_only),
+            color_muted("power"),
+            capacity_meter(snapshot.battery_capacity),
+            color_muted("charge")
         )?;
         writer.flush()
     }
@@ -436,20 +427,60 @@ fn format_state_json(state: &BatteryState) -> String {
 }
 
 fn format_state_lines(state: &BatteryState) -> Vec<String> {
-    vec![
-        format!("total: {}", format_duration(state.counted_seconds)),
-        format!(
-            "state: {}",
-            color_state(state.state_label(), state.on_battery_only)
+    let drain = drain_per_minute(state);
+
+    let rows = [
+        display_row(
+            "Total on battery",
+            color_bold(&format_duration(state.counted_seconds)),
+            format_duration(state.counted_seconds),
         ),
-        format!("battery: {}", color_capacity(state.battery_capacity)),
-        format!(
-            "last charged: {}",
-            color_capacity(state.last_charged_capacity)
+        display_row(
+            "Power state",
+            state_badge(state.state_label(), state.on_battery_only),
+            format!("● {}", state.state_label()),
         ),
-        format!("drain/min: {}", color_drain(drain_per_minute(state))),
-        format!("updated_at_unix: {}", state.updated_at_unix),
-    ]
+        display_row(
+            "Battery",
+            capacity_meter(state.battery_capacity),
+            plain_capacity_meter(state.battery_capacity),
+        ),
+        display_row(
+            "Last charged",
+            color_capacity(state.last_charged_capacity),
+            format_capacity(state.last_charged_capacity),
+        ),
+        display_row("Drain rate", color_drain(drain), format_drain(drain)),
+        display_row(
+            "Updated",
+            color_muted(&state.updated_at_unix.to_string()),
+            state.updated_at_unix.to_string(),
+        ),
+    ];
+
+    card_lines("battery-up", &rows)
+}
+
+fn format_snapshot_lines(snapshot: &PowerSnapshot, counted: Duration) -> Vec<String> {
+    let rows = [
+        display_row(
+            "Session on battery",
+            color_bold(&format_duration(counted.as_secs())),
+            format_duration(counted.as_secs()),
+        ),
+        display_row(
+            "Power state",
+            state_badge(snapshot.state_label(), snapshot.on_battery_only),
+            format!("● {}", snapshot.state_label()),
+        ),
+        display_row(
+            "Battery",
+            capacity_meter(snapshot.battery_capacity),
+            plain_capacity_meter(snapshot.battery_capacity),
+        ),
+    ];
+
+    card_lines("battery-up", &rows)
 }
 
 fn format_duration(total: u64) -> String {
@@ -463,6 +494,45 @@ fn format_capacity(capacity: Option<u8>) -> String {
     capacity
         .map(|value| format!("{value}%"))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn capacity_meter(capacity: Option<u8>) -> String {
+    match capacity {
+        Some(value) => format!(
+            "{} {}",
+            color_capacity_bar(value, true),
+            color_capacity(Some(value))
+        ),
+        None => color_capacity(None),
+    }
+}
+
+fn plain_capacity_meter(capacity: Option<u8>) -> String {
+    match capacity {
+        Some(value) => format!(
+            "{} {}",
+            capacity_bar(value, false),
+            format_capacity(Some(value))
+        ),
+        None => format_capacity(None),
+    }
+}
+
+fn color_capacity_bar(capacity: u8, compact: bool) -> String {
+    let bar = capacity_bar(capacity, compact);
+
+    match capacity {
+        value if value >= 70 => color(&bar, "32"),
+        value if value >= 30 => color(&bar, "33"),
+        _ => color(&bar, "31"),
+    }
+}
+
+fn capacity_bar(capacity: u8, compact: bool) -> String {
+    let width = if compact { 10usize } else { 18usize };
+    let filled = (usize::from(capacity).min(100) * width + 50) / 100;
+    let empty = width.saturating_sub(filled);
+    format!("{}{}", "▰".repeat(filled), "▱".repeat(empty))
 }
 
 fn drain_per_minute(state: &BatteryState) -> Option<f64> {
@@ -498,9 +568,7 @@ fn color_capacity(capacity: Option<u8>) -> String {
 }
 
 fn color_drain(value: Option<f64>) -> String {
-    let formatted = value
-        .map(|value| format!("{value:.2}%/min"))
-        .unwrap_or_else(|| "unknown".to_string());
+    let formatted = format_drain(value);
     match value {
         Some(value) if value <= 0.20 => color(&formatted, "32"),
         Some(value) if value <= 0.60 => color(&formatted, "33"),
@@ -511,6 +579,119 @@ fn color_drain(value: Option<f64>) -> String {
 
 fn color(value: &str, code: &str) -> String {
     format!("\x1b[{code}m{value}\x1b[0m")
+}
+
+fn card_lines(title: &str, rows: &[String]) -> Vec<String> {
+    const WIDTH: usize = 58;
+
+    let title = format!(" {title} ");
+    let top_fill = WIDTH.saturating_sub(title.len() + 2);
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    lines.push(format!("╭{title}{}╮", "─".repeat(top_fill)));
+
+    for row in rows {
+        lines.push(format!("│ {row} │"));
+    }
+
+    lines.push(format!("╰{}╯", "─".repeat(WIDTH - 2)));
+    lines
+}
+
+fn help_lines() -> Vec<String> {
+    let rows = [
+        display_row(
+            "Usage",
+            color_bold("battery-up [command] [options]"),
+            "battery-up [command] [options]".to_string(),
+        ),
+        display_row(
+            "watch",
+            "measure this terminal session".to_string(),
+            "measure this terminal session".to_string(),
+        ),
+        display_row(
+            "daemon",
+            "persist time for systemd".to_string(),
+            "persist time for systemd".to_string(),
+        ),
+        display_row(
+            "status",
+            "show persisted total".to_string(),
+            "show persisted total".to_string(),
+        ),
+        display_row(
+            "reset",
+            "reset persisted total".to_string(),
+            "reset persisted total".to_string(),
+        ),
+        display_row(
+            "--interval <sec>",
+            "refresh interval".to_string(),
+            "refresh interval".to_string(),
+        ),
+        display_row(
+            "--once",
+            "print once and exit".to_string(),
+            "print once and exit".to_string(),
+        ),
+        display_row(
+            "--live",
+            "refresh status in place".to_string(),
+            "refresh status in place".to_string(),
+        ),
+        display_row(
+            "--json",
+            "machine-readable output".to_string(),
+            "machine-readable output".to_string(),
+        ),
+        display_row(
+            "--state-file",
+            "/var/lib/battery-up/state".to_string(),
+            "/var/lib/battery-up/state".to_string(),
+        ),
+        display_row(
+            "--sysfs-root",
+            "/sys/class/power_supply".to_string(),
+            "/sys/class/power_supply".to_string(),
+        ),
+    ];
+
+    card_lines("battery-up help", &rows)
+}
+
+fn display_row(label: &str, styled_value: String, plain_value: String) -> String {
+    const INNER_WIDTH: usize = 54;
+    const LABEL_WIDTH: usize = 18;
+
+    let label = format!("{label:<LABEL_WIDTH$}");
+    let visible_len = LABEL_WIDTH + 2 + plain_value.chars().count();
+    let padding = INNER_WIDTH.saturating_sub(visible_len);
+
+    format!(
+        "{}  {}{}",
+        color_muted(&label),
+        styled_value,
+        " ".repeat(padding)
+    )
+}
+
+fn state_badge(label: &str, on_battery_only: bool) -> String {
+    let badge = format!("● {label}");
+    color_state(&badge, on_battery_only)
+}
+
+fn format_drain(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.2}%/min"))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn color_bold(value: &str) -> String {
+    color(value, "1")
+}
+
+fn color_muted(value: &str) -> String {
+    color(value, "90")
 }
 
 fn json_option_u8(value: Option<u8>) -> String {
