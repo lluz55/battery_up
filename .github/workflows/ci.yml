@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  nix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          use-flakehub: false
+
+      - name: Check flake
+        run: nix flake check
+
+      - name: Build package
+        run: nix build .
