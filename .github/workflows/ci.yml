@@ -21,7 +21,7 @@ jobs:
           use-flakehub: false
 
       - name: Check flake
-        run: nix flake check
+        run: nix flake check --all-systems
 
       - name: Build package
         run: nix build .
