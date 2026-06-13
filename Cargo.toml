@@ -1,0 +1,14 @@
+[package]
+name = "battery-up"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CLI to measure how long a Linux notebook runs only on battery during the command session."
+
+[lib]
+name = "battery_up"
+path = "src/lib.rs"
+
+[[bin]]
+name = "battery-up"
+path = "src/main.rs"
