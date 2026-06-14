@@ -34,7 +34,7 @@
             pname = "battery-up";
             version = "0.1.0";
             inherit src;
-            cargoHash = "sha256-3TJSuQNjIKQo7M69LR0cOvnTKTX4W2qZimyC11Hmh/E=";
+            cargoHash = "sha256-+WsmRZOS1CCHA8GFVLrIONR+pSTNZ9qvb77+SyBCmfE=";
             nativeBuildInputs = with pkgs; [
               pkg-config
             ];
