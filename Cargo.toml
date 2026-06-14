@@ -1,13 +1,12 @@
 [package]
 name = "battery-up"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "CLI to measure how long a Linux notebook runs only on battery during the command session."
 
 [dependencies]
 cosmic = { package = "libcosmic", git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["applet"] }
-unicode-width = "0.2"
 
 [lib]
 name = "battery_up"

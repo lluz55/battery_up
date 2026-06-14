@@ -486,10 +486,9 @@ dependencies = [
 
 [[package]]
 name = "battery-up"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libcosmic",
- "unicode-width",
 ]
 
 [[package]]

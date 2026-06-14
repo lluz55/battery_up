@@ -40,10 +40,12 @@ impl PowerSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatteryState {
     pub counted_seconds: u64,
+    pub standby_seconds: u64,
     pub on_battery_only: bool,
     pub battery_capacity: Option<u8>,
     pub last_charged_capacity: Option<u8>,
     pub discharge_seconds: u64,
+    pub standby_drop_percent: u64,
     pub updated_at_unix: u64,
 }
 
@@ -51,6 +53,7 @@ impl BatteryState {
     pub fn new(counted_seconds: u64, snapshot: &PowerSnapshot) -> Self {
         Self {
             counted_seconds,
+            standby_seconds: 0,
             on_battery_only: snapshot.on_battery_only,
             battery_capacity: snapshot.battery_capacity,
             last_charged_capacity: if snapshot.on_battery_only {
@@ -59,6 +62,7 @@ impl BatteryState {
                 snapshot.battery_capacity
             },
             discharge_seconds: 0,
+            standby_drop_percent: 0,
             updated_at_unix: unix_now(),
         }
     }
@@ -68,6 +72,7 @@ impl BatteryState {
         counted_seconds: u64,
         snapshot: &PowerSnapshot,
         elapsed_seconds: u64,
+        standby_elapsed_seconds: u64,
     ) -> Self {
         let last_charged_capacity = if snapshot.on_battery_only {
             previous
@@ -88,12 +93,40 @@ impl BatteryState {
             0
         };
 
+        let standby_increment = if snapshot.on_battery_only
+            && previous.filter(|state| state.on_battery_only).is_some()
+        {
+            standby_elapsed_seconds
+        } else {
+            0
+        };
+        let standby_seconds = previous
+            .map(|state| state.standby_seconds)
+            .unwrap_or(0)
+            .saturating_add(standby_increment);
+        let standby_drop_increment = if standby_increment > 0 {
+            previous
+                .and_then(|state| state.battery_capacity)
+                .zip(snapshot.battery_capacity)
+                .and_then(|(before, after)| before.checked_sub(after))
+                .map(u64::from)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let standby_drop_percent = previous
+            .map(|state| state.standby_drop_percent)
+            .unwrap_or(0)
+            .saturating_add(standby_drop_increment);
+
         Self {
             counted_seconds,
+            standby_seconds,
             on_battery_only: snapshot.on_battery_only,
             battery_capacity: snapshot.battery_capacity,
             last_charged_capacity,
             discharge_seconds,
+            standby_drop_percent,
             updated_at_unix: unix_now(),
         }
     }
@@ -206,6 +239,7 @@ pub fn write_battery_state(path: impl AsRef<Path>, state: &BatteryState) -> io::
     let temp_path = path.with_extension("tmp");
     let mut file = fs::File::create(&temp_path)?;
     writeln!(file, "counted_seconds={}", state.counted_seconds)?;
+    writeln!(file, "standby_seconds={}", state.standby_seconds)?;
     writeln!(file, "on_battery_only={}", state.on_battery_only)?;
     writeln!(
         file,
@@ -224,6 +258,7 @@ pub fn write_battery_state(path: impl AsRef<Path>, state: &BatteryState) -> io::
             .unwrap_or_else(|| "unknown".to_string())
     )?;
     writeln!(file, "discharge_seconds={}", state.discharge_seconds)?;
+    writeln!(file, "standby_drop_percent={}", state.standby_drop_percent)?;
     writeln!(file, "updated_at_unix={}", state.updated_at_unix)?;
     file.sync_all()?;
     fs::rename(temp_path, path)
@@ -231,10 +266,12 @@ pub fn write_battery_state(path: impl AsRef<Path>, state: &BatteryState) -> io::
 
 fn parse_battery_state(raw: &str) -> io::Result<BatteryState> {
     let mut counted_seconds = None;
+    let mut standby_seconds = None;
     let mut on_battery_only = None;
     let mut battery_capacity = None;
     let mut last_charged_capacity = None;
     let mut discharge_seconds = None;
+    let mut standby_drop_percent = None;
     let mut updated_at_unix = None;
 
     for line in raw.lines() {
@@ -244,6 +281,7 @@ fn parse_battery_state(raw: &str) -> io::Result<BatteryState> {
 
         match key {
             "counted_seconds" => counted_seconds = value.parse().ok(),
+            "standby_seconds" => standby_seconds = value.parse().ok(),
             "on_battery_only" => on_battery_only = value.parse().ok(),
             "battery_capacity" => {
                 battery_capacity = if value == "unknown" {
@@ -260,6 +298,7 @@ fn parse_battery_state(raw: &str) -> io::Result<BatteryState> {
                 };
             }
             "discharge_seconds" => discharge_seconds = value.parse().ok(),
+            "standby_drop_percent" => standby_drop_percent = value.parse().ok(),
             "updated_at_unix" => updated_at_unix = value.parse().ok(),
             _ => {}
         }
@@ -267,10 +306,12 @@ fn parse_battery_state(raw: &str) -> io::Result<BatteryState> {
 
     Ok(BatteryState {
         counted_seconds: counted_seconds.ok_or_else(invalid_state)?,
+        standby_seconds: standby_seconds.unwrap_or(0),
         on_battery_only: on_battery_only.ok_or_else(invalid_state)?,
         battery_capacity: battery_capacity.ok_or_else(invalid_state)?,
         last_charged_capacity: last_charged_capacity.unwrap_or(None),
         discharge_seconds: discharge_seconds.unwrap_or(0),
+        standby_drop_percent: standby_drop_percent.unwrap_or(0),
         updated_at_unix: updated_at_unix.ok_or_else(invalid_state)?,
     })
 }
@@ -408,10 +449,12 @@ mod tests {
         let path = fixture.root.join("state");
         let state = BatteryState {
             counted_seconds: 3661,
+            standby_seconds: 120,
             on_battery_only: true,
             battery_capacity: Some(55),
             last_charged_capacity: Some(80),
             discharge_seconds: 900,
+            standby_drop_percent: 2,
             updated_at_unix: 123,
         };
 
@@ -430,6 +473,8 @@ mod tests {
         assert_eq!(state.battery_capacity, None);
         assert_eq!(state.last_charged_capacity, None);
         assert_eq!(state.discharge_seconds, 0);
+        assert_eq!(state.standby_seconds, 0);
+        assert_eq!(state.standby_drop_percent, 0);
     }
 
     #[test]
@@ -445,15 +490,37 @@ mod tests {
             battery_capacity: Some(88),
         };
 
-        let state = BatteryState::next(None, 0, &plugged, 0);
-        let state = BatteryState::next(Some(&state), 60, &discharging, 60);
+        let state = BatteryState::next(None, 0, &plugged, 0, 0);
+        let state = BatteryState::next(Some(&state), 60, &discharging, 60, 0);
 
         assert_eq!(state.last_charged_capacity, Some(91));
         assert_eq!(state.discharge_seconds, 60);
 
-        let state = BatteryState::next(Some(&state), 120, &discharging, 60);
+        let state = BatteryState::next(Some(&state), 120, &discharging, 60, 0);
 
         assert_eq!(state.last_charged_capacity, Some(91));
         assert_eq!(state.discharge_seconds, 120);
+    }
+
+    #[test]
+    fn tracks_standby_time_and_drop_separately() {
+        let discharging_before = PowerSnapshot {
+            supplies: Vec::new(),
+            on_battery_only: true,
+            battery_capacity: Some(88),
+        };
+        let discharging_after = PowerSnapshot {
+            supplies: Vec::new(),
+            on_battery_only: true,
+            battery_capacity: Some(86),
+        };
+
+        let state = BatteryState::next(None, 60, &discharging_before, 60, 0);
+        let state = BatteryState::next(Some(&state), 120, &discharging_after, 60, 300);
+
+        assert_eq!(state.counted_seconds, 120);
+        assert_eq!(state.discharge_seconds, 120);
+        assert_eq!(state.standby_seconds, 300);
+        assert_eq!(state.standby_drop_percent, 2);
     }
 }

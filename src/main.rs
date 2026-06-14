@@ -2,13 +2,14 @@ use battery_up::{
     read_battery_state, read_power_snapshot, write_battery_state, BatteryState, PowerSnapshot,
 };
 use std::env;
+use std::ffi::CStr;
 use std::io::{self, Write};
+use std::os::raw::{c_char, c_int, c_long};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-use unicode_width::UnicodeWidthStr;
 
 const SYSFS_POWER_SUPPLY: &str = "/sys/class/power_supply";
 const DEFAULT_STATE_FILE: &str = "/var/lib/battery-up/state";
@@ -23,6 +24,23 @@ extern "C" fn handle_signal(_: i32) {
 
 extern "C" {
     fn signal(signum: i32, handler: extern "C" fn(i32)) -> extern "C" fn(i32);
+    fn localtime_r(timep: *const c_long, result: *mut Tm) -> *mut Tm;
+    fn strftime(s: *mut c_char, max: usize, format: *const c_char, tm: *const Tm) -> usize;
+}
+
+#[repr(C)]
+struct Tm {
+    tm_sec: c_int,
+    tm_min: c_int,
+    tm_hour: c_int,
+    tm_mday: c_int,
+    tm_mon: c_int,
+    tm_year: c_int,
+    tm_wday: c_int,
+    tm_yday: c_int,
+    tm_isdst: c_int,
+    tm_gmtoff: c_long,
+    tm_zone: *const c_char,
 }
 
 #[derive(Debug)]
@@ -115,6 +133,7 @@ fn run_daemon(args: &Args) -> Result<(), String> {
         .map(|state| state.counted_seconds)
         .unwrap_or(0);
     let mut last_tick = Instant::now();
+    let mut can_detect_standby = false;
 
     while !STOP.load(Ordering::SeqCst) {
         let now = Instant::now();
@@ -122,19 +141,34 @@ fn run_daemon(args: &Args) -> Result<(), String> {
         last_tick = now;
 
         let snapshot = read_power_snapshot(&args.sysfs_root).map_err(|err| err.to_string())?;
+        let wall_elapsed = previous_state
+            .as_ref()
+            .map(|state| current_unix().saturating_sub(state.updated_at_unix))
+            .unwrap_or(elapsed);
+        let standby_elapsed = if can_detect_standby {
+            wall_elapsed.saturating_sub(elapsed)
+        } else {
+            0
+        };
         if snapshot.on_battery_only {
             counted_seconds = counted_seconds.saturating_add(elapsed);
         }
 
-        let state =
-            BatteryState::next(previous_state.as_ref(), counted_seconds, &snapshot, elapsed);
+        let state = BatteryState::next(
+            previous_state.as_ref(),
+            counted_seconds,
+            &snapshot,
+            elapsed,
+            standby_elapsed,
+        );
         write_battery_state(&args.state_file, &state).map_err(|err| err.to_string())?;
         previous_state = Some(state);
+        can_detect_standby = true;
         thread::sleep(args.interval);
     }
 
     let snapshot = read_power_snapshot(&args.sysfs_root).map_err(|err| err.to_string())?;
-    let state = BatteryState::next(previous_state.as_ref(), counted_seconds, &snapshot, 0);
+    let state = BatteryState::next(previous_state.as_ref(), counted_seconds, &snapshot, 0, 0);
     write_battery_state(&args.state_file, &state).map_err(|err| err.to_string())
 }
 
@@ -406,27 +440,45 @@ fn write_status_block(
 
 fn format_state_json(state: &BatteryState) -> String {
     format!(
-        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"updated_at_unix\":{}}}",
+        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"standby_seconds\":{},\"standby_hms\":\"{}\",\"standby_drop_percent\":{},\"standby_drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"total_battery_seconds\":{},\"total_battery_hms\":\"{}\",\"updated_at_unix\":{}}}",
         state.state_label(),
         state.on_battery_only,
         json_option_u8(state.battery_capacity),
         json_option_u8(state.last_charged_capacity),
         state.discharge_seconds,
         json_option_f64(drain_per_minute(state)),
+        state.standby_seconds,
+        format_duration(state.standby_seconds),
+        state.standby_drop_percent,
+        json_option_f64(standby_drain_per_minute(state)),
         state.counted_seconds,
         format_duration(state.counted_seconds),
+        total_battery_seconds(state),
+        format_duration(total_battery_seconds(state)),
         state.updated_at_unix
     )
 }
 
 fn format_state_lines(state: &BatteryState) -> Vec<String> {
     let drain = drain_per_minute(state);
+    let standby_drain = standby_drain_per_minute(state);
+    let updated_at = format_human_time(state.updated_at_unix);
 
     let rows = [
         display_row(
-            "Total on battery",
+            "Battery active",
             color_bold(&format_duration(state.counted_seconds)),
             format_duration(state.counted_seconds),
+        ),
+        display_row(
+            "Battery standby",
+            color_bold(&format_duration(state.standby_seconds)),
+            format_duration(state.standby_seconds),
+        ),
+        display_row(
+            "Battery total",
+            color_bold(&format_duration(total_battery_seconds(state))),
+            format_duration(total_battery_seconds(state)),
         ),
         display_row(
             "Power state",
@@ -445,13 +497,14 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
         ),
         display_row("Drain rate", color_drain(drain), format_drain(drain)),
         display_row(
-            "Updated",
-            color_muted(&state.updated_at_unix.to_string()),
-            state.updated_at_unix.to_string(),
+            "Standby drain",
+            color_drain(standby_drain),
+            format_drain(standby_drain),
         ),
+        display_row("Updated", color_muted(&updated_at), updated_at),
     ];
 
-    card_lines("battery-up", &rows)
+    section_lines("battery-up", &rows)
 }
 
 fn format_snapshot_lines(snapshot: &PowerSnapshot, counted: Duration) -> Vec<String> {
@@ -473,7 +526,7 @@ fn format_snapshot_lines(snapshot: &PowerSnapshot, counted: Duration) -> Vec<Str
         ),
     ];
 
-    card_lines("battery-up", &rows)
+    section_lines("battery-up", &rows)
 }
 
 fn format_duration(total: u64) -> String {
@@ -542,6 +595,56 @@ fn drain_per_minute(state: &BatteryState) -> Option<f64> {
     Some((f64::from(start - current) * 60.0) / state.discharge_seconds as f64)
 }
 
+fn standby_drain_per_minute(state: &BatteryState) -> Option<f64> {
+    if state.standby_seconds == 0 || state.standby_drop_percent == 0 {
+        return None;
+    }
+
+    Some((state.standby_drop_percent as f64 * 60.0) / state.standby_seconds as f64)
+}
+
+fn total_battery_seconds(state: &BatteryState) -> u64 {
+    state.counted_seconds.saturating_add(state.standby_seconds)
+}
+
+fn current_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn format_human_time(unix: u64) -> String {
+    let timestamp = unix.min(c_long::MAX as u64) as c_long;
+    let mut tm = Tm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    let mut buffer = [0 as c_char; 64];
+    let format = c"%Y-%m-%d %H:%M:%S %Z";
+
+    unsafe {
+        if localtime_r(&timestamp, &mut tm).is_null() {
+            return unix.to_string();
+        }
+        if strftime(buffer.as_mut_ptr(), buffer.len(), format.as_ptr(), &tm) == 0 {
+            return unix.to_string();
+        }
+        CStr::from_ptr(buffer.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 fn color_state(label: &str, on_battery_only: bool) -> String {
     if on_battery_only {
         color(label, "33")
@@ -574,21 +677,10 @@ fn color(value: &str, code: &str) -> String {
     format!("\x1b[{code}m{value}\x1b[0m")
 }
 
-fn card_lines(title: &str, rows: &[String]) -> Vec<String> {
-    const WIDTH: usize = 58;
-    const INNER_WIDTH: usize = WIDTH - 4;
-
-    let title = format!(" {title} ");
-    let top_fill = WIDTH.saturating_sub(title.len() + 2);
-    let mut lines = Vec::with_capacity(rows.len() + 2);
-    lines.push(format!("+{title}{}+", "-".repeat(top_fill)));
-
-    for row in rows {
-        let padding = INNER_WIDTH.saturating_sub(visible_width(row));
-        lines.push(format!("| {row}{} |", " ".repeat(padding)));
-    }
-
-    lines.push(format!("+{}+", "-".repeat(WIDTH - 2)));
+fn section_lines(title: &str, rows: &[String]) -> Vec<String> {
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(color_bold(title));
+    lines.extend(rows.iter().cloned());
     lines
 }
 
@@ -651,7 +743,7 @@ fn help_lines() -> Vec<String> {
         ),
     ];
 
-    card_lines("battery-up help", &rows)
+    section_lines("battery-up help", &rows)
 }
 
 fn display_row(label: &str, styled_value: String, _plain_value: String) -> String {
@@ -660,26 +752,6 @@ fn display_row(label: &str, styled_value: String, _plain_value: String) -> Strin
     let label = format!("{label:<LABEL_WIDTH$}");
 
     format!("{}  {}", color_muted(&label), styled_value)
-}
-
-fn visible_width(value: &str) -> usize {
-    let mut visible = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for ansi_ch in chars.by_ref() {
-                if ansi_ch.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            visible.push(ch);
-        }
-    }
-
-    UnicodeWidthStr::width(visible.as_str())
 }
 
 fn state_badge(label: &str, on_battery_only: bool) -> String {
