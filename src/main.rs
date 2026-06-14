@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+use unicode_width::UnicodeWidthStr;
 
 const SYSFS_POWER_SUPPLY: &str = "/sys/class/power_supply";
 const DEFAULT_STATE_FILE: &str = "/var/lib/battery-up/state";
@@ -656,7 +657,7 @@ fn display_row(label: &str, styled_value: String, plain_value: String) -> String
     const LABEL_WIDTH: usize = 18;
 
     let label = format!("{label:<LABEL_WIDTH$}");
-    let visible_len = LABEL_WIDTH + 2 + plain_value.chars().count();
+    let visible_len = LABEL_WIDTH + 2 + UnicodeWidthStr::width(plain_value.as_str());
     let padding = INNER_WIDTH.saturating_sub(visible_len);
 
     format!(

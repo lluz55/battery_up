@@ -7,6 +7,7 @@ description = "CLI to measure how long a Linux notebook runs only on battery dur
 
 [dependencies]
 cosmic = { package = "libcosmic", git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["applet"] }
+unicode-width = "0.2"
 
 [lib]
 name = "battery_up"
