@@ -576,17 +576,19 @@ fn color(value: &str, code: &str) -> String {
 
 fn card_lines(title: &str, rows: &[String]) -> Vec<String> {
     const WIDTH: usize = 58;
+    const INNER_WIDTH: usize = WIDTH - 4;
 
     let title = format!(" {title} ");
     let top_fill = WIDTH.saturating_sub(title.len() + 2);
     let mut lines = Vec::with_capacity(rows.len() + 2);
-    lines.push(format!("╭{title}{}╮", "─".repeat(top_fill)));
+    lines.push(format!("+{title}{}+", "-".repeat(top_fill)));
 
     for row in rows {
-        lines.push(format!("│ {row} │"));
+        let padding = INNER_WIDTH.saturating_sub(visible_width(row));
+        lines.push(format!("| {row}{} |", " ".repeat(padding)));
     }
 
-    lines.push(format!("╰{}╯", "─".repeat(WIDTH - 2)));
+    lines.push(format!("+{}+", "-".repeat(WIDTH - 2)));
     lines
 }
 
@@ -652,20 +654,32 @@ fn help_lines() -> Vec<String> {
     card_lines("battery-up help", &rows)
 }
 
-fn display_row(label: &str, styled_value: String, plain_value: String) -> String {
-    const INNER_WIDTH: usize = 54;
+fn display_row(label: &str, styled_value: String, _plain_value: String) -> String {
     const LABEL_WIDTH: usize = 18;
 
     let label = format!("{label:<LABEL_WIDTH$}");
-    let visible_len = LABEL_WIDTH + 2 + UnicodeWidthStr::width(plain_value.as_str());
-    let padding = INNER_WIDTH.saturating_sub(visible_len);
 
-    format!(
-        "{}  {}{}",
-        color_muted(&label),
-        styled_value,
-        " ".repeat(padding)
-    )
+    format!("{}  {}", color_muted(&label), styled_value)
+}
+
+fn visible_width(value: &str) -> usize {
+    let mut visible = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for ansi_ch in chars.by_ref() {
+                if ansi_ch.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            visible.push(ch);
+        }
+    }
+
+    UnicodeWidthStr::width(visible.as_str())
 }
 
 fn state_badge(label: &str, on_battery_only: bool) -> String {

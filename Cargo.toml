@@ -1,6 +1,6 @@
 [package]
 name = "battery-up"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "CLI to measure how long a Linux notebook runs only on battery during the command session."

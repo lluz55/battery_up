@@ -32,9 +32,9 @@
         {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up";
-            version = "0.1.0";
+            version = "0.1.1";
             inherit src;
-            cargoHash = "sha256-+WsmRZOS1CCHA8GFVLrIONR+pSTNZ9qvb77+SyBCmfE=";
+            cargoHash = "sha256-ww7zB94LCLVkybmK0M5CIPukxFMAdyXKyS28GDY18l0=";
             nativeBuildInputs = with pkgs; [
               pkg-config
             ];
