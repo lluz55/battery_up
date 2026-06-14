@@ -50,6 +50,8 @@
               wayland
             ];
             postInstall = ''
+              substituteInPlace data/applications/dev.lluz.BatteryUpApplet.desktop \
+                --replace-fail 'Exec=cosmic-applet-battery-up' "Exec=$out/bin/cosmic-applet-battery-up"
               install -Dm0644 data/applications/dev.lluz.BatteryUpApplet.desktop \
                 $out/share/applications/dev.lluz.BatteryUpApplet.desktop
               install -Dm0644 data/icons/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg \
