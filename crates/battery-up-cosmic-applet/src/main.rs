@@ -1,4 +1,4 @@
-use battery_up::{read_battery_state, BatteryState};
+use battery_up_core::{read_battery_state, BatteryState};
 use cosmic::{
     app, applet,
     applet::cosmic_panel_config::PanelAnchor,

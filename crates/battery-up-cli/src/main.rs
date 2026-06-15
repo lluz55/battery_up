@@ -1,4 +1,4 @@
-use battery_up::{
+use battery_up_core::{
     read_battery_state, read_power_snapshot, write_battery_state, BatteryState, PowerSnapshot,
 };
 use std::env;
@@ -123,15 +123,12 @@ fn run_watch(args: &Args) -> Result<(), String> {
 fn run_daemon(args: &Args) -> Result<(), String> {
     install_signal_handlers();
 
-    let mut previous_state = match read_battery_state(&args.state_file) {
-        Ok(state) => Some(state),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err.to_string()),
-    };
-    let mut counted_seconds = previous_state
-        .as_ref()
-        .map(|state| state.counted_seconds)
-        .unwrap_or(0);
+    let snapshot = read_power_snapshot(&args.sysfs_root).map_err(|err| err.to_string())?;
+    let initial_state = BatteryState::new(0, &snapshot);
+    write_battery_state(&args.state_file, &initial_state).map_err(|err| err.to_string())?;
+
+    let mut previous_state = Some(initial_state);
+    let mut counted_seconds: u64 = 0;
     let mut last_tick = Instant::now();
     let mut can_detect_standby = false;
 

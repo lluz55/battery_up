@@ -1,21 +1,29 @@
-[package]
-name = "battery-up"
+[workspace]
+members = [
+  "crates/battery-up-cli",
+  "crates/battery-up-core",
+  "crates/battery-up-cosmic-applet",
+]
+default-members = ["crates/battery-up-cli"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.2"
 edition = "2021"
 license = "MIT"
-description = "CLI to measure how long a Linux notebook runs only on battery during the command session."
 
-[dependencies]
-cosmic = { package = "libcosmic", git = "https://github.com/pop-os/libcosmic", default-features = false, features = ["applet"] }
+[profile.release_cli]
+inherits = "release"
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
 
-[lib]
-name = "battery_up"
-path = "src/lib.rs"
-
-[[bin]]
-name = "battery-up"
-path = "src/main.rs"
-
-[[bin]]
-name = "cosmic-applet-battery-up"
-path = "src/bin/cosmic-applet-battery-up.rs"
+[profile.release_applet]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = "debuginfo"

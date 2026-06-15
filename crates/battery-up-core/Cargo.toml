@@ -1,0 +1,10 @@
+[package]
+name = "battery-up-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core power-supply and state handling for battery-up."
+
+[lib]
+name = "battery_up_core"
+path = "src/lib.rs"

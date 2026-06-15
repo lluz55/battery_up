@@ -1,0 +1,13 @@
+[package]
+name = "battery-up"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI to measure how long a Linux notebook runs only on battery during the command session."
+
+[dependencies]
+battery-up-core = { path = "../battery-up-core" }
+
+[[bin]]
+name = "battery-up"
+path = "src/main.rs"

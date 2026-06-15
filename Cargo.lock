@@ -488,6 +488,18 @@ dependencies = [
 name = "battery-up"
 version = "0.1.2"
 dependencies = [
+ "battery-up-core",
+]
+
+[[package]]
+name = "battery-up-core"
+version = "0.1.2"
+
+[[package]]
+name = "battery-up-cosmic-applet"
+version = "0.1.2"
+dependencies = [
+ "battery-up-core",
  "libcosmic",
 ]
 
