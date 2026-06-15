@@ -32,7 +32,7 @@
         {
           cli = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up";
-            version = "0.1.2";
+            version = "0.1.3";
             inherit src;
             buildType = "release_cli";
             cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
@@ -47,7 +47,7 @@
 
           applet = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up-cosmic-applet";
-            version = "0.1.2";
+            version = "0.1.3";
             inherit src;
             buildType = "release_applet";
             cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
@@ -78,7 +78,7 @@
           };
 
           full = pkgs.symlinkJoin {
-            name = "battery-up-full-0.1.2";
+            name = "battery-up-full-0.1.3";
             paths = [
               self.packages.${system}.cli
               self.packages.${system}.applet
