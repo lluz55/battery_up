@@ -13,6 +13,7 @@ O projeto foi feito para Linux/NixOS e lê o estado diretamente de
 nix run .
 ```
 
+O pacote padrão da flake é apenas o CLI, sem compilar a pilha COSMIC do applet.
 Neste diretório local, se o Nix reclamar da pasta `.git` do ambiente, use:
 
 ```sh
@@ -44,6 +45,10 @@ O daemon acumula o tempo em segundo plano:
 ```sh
 nix run . -- daemon
 ```
+
+Ao carregar, o daemon zera o contador e escreve um novo estado inicial. O arquivo
+de estado anterior ainda pode ser lido por `status`, mas não é reutilizado como
+ponto de partida de uma nova execução do daemon.
 
 Depois consulte o total com:
 
@@ -108,10 +113,12 @@ nix run . -- status
 
 ### Applet para COSMIC
 
-O pacote também instala o applet `cosmic-applet-battery-up`, registrado pelo
-arquivo desktop `dev.lluz.BatteryUpApplet.desktop` com `X-CosmicApplet=true`.
-No COSMIC, depois de instalar o pacote no sistema, ele aparece como `Battery Up`
-na lista de applets que podem ser adicionados ao painel/barra.
+O applet fica no pacote separado `.#applet`, registrado pelo arquivo desktop
+`dev.lluz.BatteryUpApplet.desktop` com `X-CosmicApplet=true`. No COSMIC, depois
+de instalar esse pacote no sistema, ele aparece como `Battery Up` na lista de
+applets que podem ser adicionados ao painel/barra.
+
+Para instalar CLI e applet juntos, use o pacote `.#full`.
 
 O applet usa o arquivo de estado do daemon (`/var/lib/battery-up/state`) e mostra
 o tempo acumulado com um ícone simbólico de bateria. Para usar outro arquivo de
@@ -135,6 +142,18 @@ Dentro do shell:
 cargo test
 cargo run -- --once
 ```
+
+O workspace separa o core, o CLI e o applet:
+
+```sh
+cargo test -p battery-up-core -p battery-up
+cargo build -p battery-up --profile release_cli
+cargo build -p battery-up-cosmic-applet --profile release_applet
+```
+
+O perfil `release_cli` prioriza um binário pequeno para o CLI. O perfil
+`release_applet` evita LTO e mantém mais paralelismo para reduzir o custo de
+release da UI COSMIC.
 
 ## Regra de contagem
 

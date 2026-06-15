@@ -30,11 +30,29 @@
           };
         in
         {
-          default = pkgs.rustPlatform.buildRustPackage {
+          cli = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up";
             version = "0.1.2";
             inherit src;
-            cargoHash = "sha256-yRezUu1FVqBHqpZazrKbjNwRUrB7py7MvroVU6GBIuI=";
+            buildType = "release_cli";
+            cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
+            cargoBuildFlags = [ "-p" "battery-up" ];
+            cargoCheckFlags = [
+              "-p"
+              "battery-up"
+              "-p"
+              "battery-up-core"
+            ];
+          };
+
+          applet = pkgs.rustPlatform.buildRustPackage {
+            pname = "battery-up-cosmic-applet";
+            version = "0.1.2";
+            inherit src;
+            buildType = "release_applet";
+            cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
+            cargoBuildFlags = [ "-p" "battery-up-cosmic-applet" ];
+            cargoCheckFlags = [ "-p" "battery-up-cosmic-applet" ];
             nativeBuildInputs = with pkgs; [
               pkg-config
             ];
@@ -58,6 +76,17 @@
                 $out/share/icons/hicolor/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg
             '';
           };
+
+          full = pkgs.symlinkJoin {
+            name = "battery-up-full-0.1.2";
+            paths = [
+              self.packages.${system}.cli
+              self.packages.${system}.applet
+            ];
+            meta.description = "battery-up CLI and COSMIC applet";
+          };
+
+          default = self.packages.${system}.cli;
         });
 
       apps = forAllSystems (system: {
