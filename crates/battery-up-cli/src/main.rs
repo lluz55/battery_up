@@ -338,7 +338,11 @@ fn print_help() {
 }
 
 fn print_version() {
-    println!("battery-up {}", env!("CARGO_PKG_VERSION"));
+    println!("battery-up {}", app_version());
+}
+
+fn app_version() -> &'static str {
+    option_env!("BATTERY_UP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 fn print_snapshot(

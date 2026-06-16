@@ -10,6 +10,11 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       version = "0.1.4";
+      versionSuffix =
+        if self ? shortRev then "+${self.shortRev}"
+        else if self ? dirtyShortRev then "+${self.dirtyShortRev}"
+        else "-dev";
+      appVersion = "${version}${versionSuffix}";
     in
     {
       overlays.default = final: _prev: {
@@ -43,6 +48,7 @@
             pname = "battery-up";
             inherit version;
             inherit src;
+            BATTERY_UP_VERSION = appVersion;
             buildType = "release_cli";
             cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
             cargoBuildFlags = [ "-p" "battery-up" ];
@@ -58,6 +64,7 @@
             pname = "battery-up-cosmic-applet";
             inherit version;
             inherit src;
+            BATTERY_UP_VERSION = appVersion;
             buildType = "release_applet";
             cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
             cargoBuildFlags = [ "-p" "battery-up-cosmic-applet" ];
