@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   nix:
@@ -21,7 +22,21 @@ jobs:
           use-flakehub: false
 
       - name: Check flake
-        run: nix flake check --all-systems
+        run: nix flake check --all-systems -L
 
-      - name: Build package
-        run: nix build .
+      - name: Build packages
+        run: nix build -L .#cli .#applet .#full
+
+      - name: Package build outputs
+        run: |
+          mkdir -p artifacts
+          tar --dereference -C result -czf artifacts/battery-up-cli-x86_64-linux.tar.gz .
+          tar --dereference -C result-1 -czf artifacts/battery-up-cosmic-applet-x86_64-linux.tar.gz .
+          tar --dereference -C result-2 -czf artifacts/battery-up-full-x86_64-linux.tar.gz .
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: battery-up-${{ github.sha }}
+          path: artifacts/*.tar.gz
+          if-no-files-found: error
