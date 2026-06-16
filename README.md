@@ -111,6 +111,43 @@ Após aplicar a configuração, consulte com:
 nix run . -- status
 ```
 
+### Uso por outra flake
+
+Para consumir a versão publicada em outra flake:
+
+```nix
+{
+  inputs.battery-up.url = "github:lluz55/battery_up/v0.1.4";
+
+  outputs = { nixpkgs, battery-up, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ battery-up.overlays.default ];
+      };
+    in
+    {
+      packages.${system}.default = pkgs.battery-up;
+    };
+}
+```
+
+Sem overlay, use diretamente:
+
+```nix
+battery-up.packages.${system}.cli
+battery-up.packages.${system}.applet
+battery-up.packages.${system}.full
+```
+
+Também é possível executar os apps expostos pela flake:
+
+```sh
+nix run github:lluz55/battery_up/v0.1.4#cli -- --once
+nix run github:lluz55/battery_up/v0.1.4#applet
+```
+
 ### Applet para COSMIC
 
 O applet fica no pacote separado `.#applet`, registrado pelo arquivo desktop

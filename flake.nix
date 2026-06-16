@@ -9,8 +9,16 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      version = "0.1.4";
     in
     {
+      overlays.default = final: _prev: {
+        battery-up = self.packages.${final.system}.cli;
+        battery-up-cli = self.packages.${final.system}.cli;
+        battery-up-cosmic-applet = self.packages.${final.system}.applet;
+        battery-up-full = self.packages.${final.system}.full;
+      };
+
       packages = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -24,6 +32,7 @@
                 ".agents"
                 ".codex"
                 ".git"
+                "dist"
                 "result"
                 "target"
               ]);
@@ -32,10 +41,10 @@
         {
           cli = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up";
-            version = "0.1.3";
+            inherit version;
             inherit src;
             buildType = "release_cli";
-            cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
+            cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
             cargoBuildFlags = [ "-p" "battery-up" ];
             cargoCheckFlags = [
               "-p"
@@ -47,10 +56,10 @@
 
           applet = pkgs.rustPlatform.buildRustPackage {
             pname = "battery-up-cosmic-applet";
-            version = "0.1.3";
+            inherit version;
             inherit src;
             buildType = "release_applet";
-            cargoHash = "sha256-pX1o6aRZTFYqWOIIWxvCN252zC4OxaBDYCJIP/JTZB8=";
+            cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
             cargoBuildFlags = [ "-p" "battery-up-cosmic-applet" ];
             cargoCheckFlags = [ "-p" "battery-up-cosmic-applet" ];
             nativeBuildInputs = with pkgs; [
@@ -78,7 +87,7 @@
           };
 
           full = pkgs.symlinkJoin {
-            name = "battery-up-full-0.1.3";
+            name = "battery-up-full-${version}";
             paths = [
               self.packages.${system}.cli
               self.packages.${system}.applet
@@ -89,13 +98,23 @@
           default = self.packages.${system}.cli;
         });
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/battery-up";
-          meta.description = "Measure notebook time running only on battery";
-        };
-      });
+      apps = forAllSystems (system:
+        let
+          cli = {
+            type = "app";
+            program = "${self.packages.${system}.cli}/bin/battery-up";
+            meta.description = "Measure notebook time running only on battery";
+          };
+        in
+        {
+          inherit cli;
+          default = cli;
+          applet = {
+            type = "app";
+            program = "${self.packages.${system}.applet}/bin/cosmic-applet-battery-up";
+            meta.description = "Run the battery-up COSMIC applet";
+          };
+        });
 
       nixosModules.default = { config, lib, pkgs, ... }:
         let
