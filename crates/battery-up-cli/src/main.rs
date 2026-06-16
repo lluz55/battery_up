@@ -232,6 +232,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 print_help();
                 std::process::exit(0);
             }
+            "-V" | "--version" => {
+                print_version();
+                std::process::exit(0);
+            }
             other => parse_option(
                 other.to_string(),
                 &mut args,
@@ -310,6 +314,10 @@ fn parse_option(
             print_help();
             std::process::exit(0);
         }
+        "-V" | "--version" => {
+            print_version();
+            std::process::exit(0);
+        }
         other => return Err(format!("unknown argument: {other}")),
     }
 
@@ -327,6 +335,10 @@ fn print_help() {
     for line in help_lines() {
         println!("{line}");
     }
+}
+
+fn print_version() {
+    println!("battery-up {}", env!("CARGO_PKG_VERSION"));
 }
 
 fn print_snapshot(
@@ -727,6 +739,11 @@ fn help_lines() -> Vec<String> {
             "--json",
             "machine-readable output".to_string(),
             "machine-readable output".to_string(),
+        ),
+        display_row(
+            "-V, --version",
+            "show version and exit".to_string(),
+            "show version and exit".to_string(),
         ),
         display_row(
             "--state-file",
