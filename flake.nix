@@ -18,10 +18,10 @@
     in
     {
       overlays.default = final: _prev: {
-        battery-up = self.packages.${final.system}.cli;
-        battery-up-cli = self.packages.${final.system}.cli;
-        battery-up-cosmic-applet = self.packages.${final.system}.applet;
-        battery-up-full = self.packages.${final.system}.full;
+        battery-up = self.packages.${final.stdenv.hostPlatform.system}.cli;
+        battery-up-cli = self.packages.${final.stdenv.hostPlatform.system}.cli;
+        battery-up-cosmic-applet = self.packages.${final.stdenv.hostPlatform.system}.applet;
+        battery-up-full = self.packages.${final.stdenv.hostPlatform.system}.full;
       };
 
       packages = forAllSystems (system:
@@ -50,7 +50,10 @@
             inherit src;
             BATTERY_UP_VERSION = appVersion;
             buildType = "release_cli";
-            cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              allowBuiltinFetchGit = true;
+            };
             cargoBuildFlags = [ "-p" "battery-up" ];
             cargoCheckFlags = [
               "-p"
@@ -58,6 +61,7 @@
               "-p"
               "battery-up-core"
             ];
+            meta.mainProgram = "battery-up";
           };
 
           applet = pkgs.rustPlatform.buildRustPackage {
@@ -66,7 +70,10 @@
             inherit src;
             BATTERY_UP_VERSION = appVersion;
             buildType = "release_applet";
-            cargoHash = "sha256-sGiTbbaFAf5NRRvxeYMi4gUE9mFPcEXfnSHBcxm7nVs=";
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              allowBuiltinFetchGit = true;
+            };
             cargoBuildFlags = [ "-p" "battery-up-cosmic-applet" ];
             cargoCheckFlags = [ "-p" "battery-up-cosmic-applet" ];
             nativeBuildInputs = with pkgs; [
@@ -91,6 +98,7 @@
               install -Dm0644 data/icons/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg \
                 $out/share/icons/hicolor/scalable/apps/dev.lluz.BatteryUpApplet-symbolic.svg
             '';
+            meta.mainProgram = "cosmic-applet-battery-up";
           };
 
           full = pkgs.symlinkJoin {
@@ -133,7 +141,7 @@
 
             package = lib.mkOption {
               type = lib.types.package;
-              default = self.packages.${pkgs.system}.default;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
               defaultText = "battery-up package from this flake";
               description = "battery-up package to run.";
             };
