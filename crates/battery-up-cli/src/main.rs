@@ -1,5 +1,6 @@
 use battery_up_core::{
-    read_battery_state, read_power_snapshot, write_battery_state, BatteryState, PowerSnapshot,
+    read_battery_state, read_power_snapshot, write_battery_state, BatteryHistoryPoint,
+    BatteryState, PowerSnapshot,
 };
 use std::env;
 use std::ffi::CStr;
@@ -159,6 +160,7 @@ fn run_daemon(args: &Args) -> Result<(), String> {
             standby_elapsed,
         );
         write_battery_state(&args.state_file, &state).map_err(|err| err.to_string())?;
+        counted_seconds = state.counted_seconds;
         previous_state = Some(state);
         can_detect_standby = true;
         thread::sleep(args.interval);
@@ -453,7 +455,7 @@ fn write_status_block(
 
 fn format_state_json(state: &BatteryState) -> String {
     format!(
-        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"standby_seconds\":{},\"standby_hms\":\"{}\",\"standby_drop_percent\":{},\"standby_drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"total_battery_seconds\":{},\"total_battery_hms\":\"{}\",\"updated_at_unix\":{}}}",
+        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"standby_seconds\":{},\"standby_hms\":\"{}\",\"active_drop_percent\":{},\"standby_drop_percent\":{},\"standby_drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"total_battery_seconds\":{},\"total_battery_hms\":\"{}\",\"updated_at_unix\":{},\"history\":[{}]}}",
         state.state_label(),
         state.on_battery_only,
         json_option_u8(state.battery_capacity),
@@ -462,13 +464,15 @@ fn format_state_json(state: &BatteryState) -> String {
         json_option_f64(drain_per_minute(state)),
         state.standby_seconds,
         format_duration(state.standby_seconds),
+        state.active_drop_percent,
         state.standby_drop_percent,
         json_option_f64(standby_drain_per_minute(state)),
         state.counted_seconds,
         format_duration(state.counted_seconds),
         total_battery_seconds(state),
         format_duration(total_battery_seconds(state)),
-        state.updated_at_unix
+        state.updated_at_unix,
+        format_history_json(&state.history)
     )
 }
 
@@ -510,6 +514,16 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
         ),
         display_row("Drain rate", color_drain(drain), format_drain(drain)),
         display_row(
+            "Active drop",
+            color_bold(&format_drop(state.active_drop_percent)),
+            format_drop(state.active_drop_percent),
+        ),
+        display_row(
+            "Standby drop",
+            color_bold(&format_drop(state.standby_drop_percent)),
+            format_drop(state.standby_drop_percent),
+        ),
+        display_row(
             "Standby drain",
             color_drain(standby_drain),
             format_drain(standby_drain),
@@ -517,7 +531,9 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
         display_row("Updated", color_muted(&updated_at), updated_at),
     ];
 
-    section_lines("battery-up", &rows)
+    let mut lines = section_lines("battery-up", &rows);
+    lines.extend(format_drop_chart(&state.history));
+    lines
 }
 
 fn format_snapshot_lines(snapshot: &PowerSnapshot, counted: Duration) -> Vec<String> {
@@ -553,6 +569,14 @@ fn format_capacity(capacity: Option<u8>) -> String {
     capacity
         .map(|value| format!("{value}%"))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_drop(drop_percent: u64) -> String {
+    match drop_percent {
+        0 => "no battery used".to_string(),
+        1 => "1% battery used".to_string(),
+        value => format!("{value}% battery used"),
+    }
 }
 
 fn capacity_meter(capacity: Option<u8>) -> String {
@@ -618,6 +642,85 @@ fn standby_drain_per_minute(state: &BatteryState) -> Option<f64> {
 
 fn total_battery_seconds(state: &BatteryState) -> u64 {
     state.counted_seconds.saturating_add(state.standby_seconds)
+}
+
+fn format_drop_chart(history: &[BatteryHistoryPoint]) -> Vec<String> {
+    const CHART_WIDTH: usize = 18;
+
+    let mut lines = Vec::new();
+    lines.push(String::new());
+    lines.push(color_bold("Drain history"));
+
+    if history.len() < 2 {
+        lines.push(color_muted("needs at least 2 samples"));
+        return lines;
+    }
+
+    let start = history.len().saturating_sub(CHART_WIDTH);
+    let points = &history[start..];
+    let max_drop = points
+        .iter()
+        .flat_map(|point| [point.active_drop_percent, point.standby_drop_percent])
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    let active_line = sparkline(
+        points.iter().map(|point| point.active_drop_percent),
+        max_drop,
+    );
+    let standby_line = sparkline(
+        points.iter().map(|point| point.standby_drop_percent),
+        max_drop,
+    );
+
+    lines.push(display_row(
+        "Active",
+        format!(
+            "{} {}",
+            color(&active_line, "33"),
+            color_bold(&format_drop(points.last().unwrap().active_drop_percent))
+        ),
+        format!(
+            "{} {}",
+            active_line,
+            format_drop(points.last().unwrap().active_drop_percent)
+        ),
+    ));
+    lines.push(display_row(
+        "Standby",
+        format!(
+            "{} {}",
+            color(&standby_line, "36"),
+            color_bold(&format_drop(points.last().unwrap().standby_drop_percent))
+        ),
+        format!(
+            "{} {}",
+            standby_line,
+            format_drop(points.last().unwrap().standby_drop_percent)
+        ),
+    ));
+    lines.push(display_row(
+        "Scale",
+        color_muted(&format!("0% to {max_drop}% battery used")),
+        format!("0% to {max_drop}% battery used"),
+    ));
+    lines
+}
+
+fn sparkline(values: impl Iterator<Item = u64>, max_value: u64) -> String {
+    const TICKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+    values
+        .map(|value| {
+            let index = if max_value == 0 {
+                0
+            } else {
+                (value.saturating_mul((TICKS.len() - 1) as u64) + max_value / 2) / max_value
+            };
+            TICKS[index as usize]
+        })
+        .collect()
 }
 
 fn current_unix() -> u64 {
@@ -801,4 +904,115 @@ fn json_option_f64(value: Option<f64>) -> String {
     value
         .map(|value| format!("{value:.4}"))
         .unwrap_or_else(|| "null".to_string())
+}
+
+fn format_history_json(history: &[BatteryHistoryPoint]) -> String {
+    history
+        .iter()
+        .map(|point| {
+            format!(
+                "{{\"updated_at_unix\":{},\"active_drop_percent\":{},\"standby_drop_percent\":{},\"battery_capacity\":{}}}",
+                point.updated_at_unix,
+                point.active_drop_percent,
+                point.standby_drop_percent,
+                json_option_u8(point.battery_capacity)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_with_history(history: Vec<BatteryHistoryPoint>) -> BatteryState {
+        BatteryState {
+            counted_seconds: 120,
+            standby_seconds: 60,
+            on_battery_only: true,
+            battery_capacity: Some(87),
+            last_charged_capacity: Some(91),
+            discharge_seconds: 120,
+            active_drop_percent: history
+                .last()
+                .map(|point| point.active_drop_percent)
+                .unwrap_or(0),
+            standby_drop_percent: history
+                .last()
+                .map(|point| point.standby_drop_percent)
+                .unwrap_or(0),
+            history,
+            updated_at_unix: 123,
+        }
+    }
+
+    #[test]
+    fn status_renders_chart_with_enough_history() {
+        let state = state_with_history(vec![
+            BatteryHistoryPoint {
+                updated_at_unix: 1,
+                active_drop_percent: 0,
+                standby_drop_percent: 0,
+                battery_capacity: Some(91),
+            },
+            BatteryHistoryPoint {
+                updated_at_unix: 2,
+                active_drop_percent: 3,
+                standby_drop_percent: 1,
+                battery_capacity: Some(87),
+            },
+        ]);
+
+        let rendered = format_state_lines(&state).join("\n");
+
+        assert!(rendered.contains("Drain history"));
+        assert!(rendered.contains("Active"));
+        assert!(rendered.contains("Standby"));
+        assert!(rendered.contains("Scale"));
+        assert!(rendered.contains("3% battery used"));
+        assert!(rendered.contains("1% battery used"));
+        assert!(rendered.contains("█"));
+    }
+
+    #[test]
+    fn status_renders_chart_fallback_without_enough_history() {
+        let state = state_with_history(vec![BatteryHistoryPoint {
+            updated_at_unix: 1,
+            active_drop_percent: 0,
+            standby_drop_percent: 0,
+            battery_capacity: Some(91),
+        }]);
+
+        let rendered = format_state_lines(&state).join("\n");
+
+        assert!(rendered.contains("Drain history"));
+        assert!(rendered.contains("needs at least 2 samples"));
+    }
+
+    #[test]
+    fn status_json_includes_drop_history() {
+        let state = state_with_history(vec![
+            BatteryHistoryPoint {
+                updated_at_unix: 1,
+                active_drop_percent: 0,
+                standby_drop_percent: 0,
+                battery_capacity: Some(91),
+            },
+            BatteryHistoryPoint {
+                updated_at_unix: 2,
+                active_drop_percent: 3,
+                standby_drop_percent: 1,
+                battery_capacity: None,
+            },
+        ]);
+
+        let json = format_state_json(&state);
+
+        assert!(json.contains("\"active_drop_percent\":3"));
+        assert!(json.contains("\"history\":["));
+        assert!(json.contains("\"updated_at_unix\":2"));
+        assert!(json.contains("\"battery_capacity\":null"));
+        assert!(json.contains("\"counted_seconds\":120"));
+    }
 }
