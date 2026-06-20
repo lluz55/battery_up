@@ -479,9 +479,15 @@ fn format_state_json(state: &BatteryState) -> String {
 fn format_state_lines(state: &BatteryState) -> Vec<String> {
     let drain = drain_per_minute(state);
     let standby_drain = standby_drain_per_minute(state);
-    let updated_at = format_human_time(state.updated_at_unix);
+    let now = current_unix();
+    let absolute_time = format_human_time(state.updated_at_unix);
+    let relative_time = format_relative_time(state.updated_at_unix, now);
+    let updated_at = format!("{relative_time} ({absolute_time})");
 
-    let rows = [
+    let (battery_styled, battery_plain) =
+        capacity_meter_with_last_charged(state.battery_capacity, state.last_charged_capacity);
+
+    let mut rows = vec![
         display_row(
             "Battery active",
             color_bold(&format_duration(state.counted_seconds)),
@@ -502,36 +508,40 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
             state_badge(state.state_label(), state.on_battery_only),
             format!("● {}", state.state_label()),
         ),
-        display_row(
-            "Battery",
-            capacity_meter(state.battery_capacity),
-            plain_capacity_meter(state.battery_capacity),
-        ),
-        display_row(
-            "Last charged",
-            color_capacity(state.last_charged_capacity),
-            format_capacity(state.last_charged_capacity),
-        ),
+        display_row("Battery", battery_styled, battery_plain),
         display_row("Drain rate", color_drain(drain), format_drain(drain)),
-        display_row(
-            "Active drop",
-            color_bold(&format_drop(state.active_drop_percent)),
-            format_drop(state.active_drop_percent),
-        ),
-        display_row(
-            "Standby drop",
-            color_bold(&format_drop(state.standby_drop_percent)),
-            format_drop(state.standby_drop_percent),
-        ),
-        display_row(
-            "Standby drain",
-            color_drain(standby_drain),
-            format_drain(standby_drain),
-        ),
-        display_row("Updated", color_muted(&updated_at), updated_at),
     ];
 
-    let mut lines = section_lines("battery-up", &rows);
+    if let Some(remaining) = estimated_remaining(state.battery_capacity, drain) {
+        rows.push(display_row(
+            "Est. remaining",
+            color_bold(&remaining),
+            remaining,
+        ));
+    }
+
+    rows.push(display_row(
+        "Active drop",
+        color_bold(&format_drop(state.active_drop_percent)),
+        format_drop(state.active_drop_percent),
+    ));
+    rows.push(display_row(
+        "Standby drop",
+        color_bold(&format_drop(state.standby_drop_percent)),
+        format_drop(state.standby_drop_percent),
+    ));
+    rows.push(display_row(
+        "Standby drain",
+        color_drain(standby_drain),
+        format_drain(standby_drain),
+    ));
+    rows.push(display_row(
+        "Updated",
+        color_muted(&updated_at),
+        updated_at,
+    ));
+
+    let mut lines = section_lines("battery-up \u{00b7} status", &rows);
     lines.extend(format_drop_chart(&state.history));
     lines
 }
@@ -555,7 +565,7 @@ fn format_snapshot_lines(snapshot: &PowerSnapshot, counted: Duration) -> Vec<Str
         ),
     ];
 
-    section_lines("battery-up", &rows)
+    section_lines("battery-up \u{00b7} watch", &rows)
 }
 
 fn format_duration(total: u64) -> String {
@@ -598,6 +608,36 @@ fn plain_capacity_meter(capacity: Option<u8>) -> String {
             format_capacity(Some(value))
         ),
         None => format_capacity(None),
+    }
+}
+
+fn capacity_meter_with_last_charged(
+    capacity: Option<u8>,
+    last_charged: Option<u8>,
+) -> (String, String) {
+    let styled_bar = match capacity {
+        Some(value) => format!(
+            "{} {}",
+            color_capacity_bar(value, true),
+            color_capacity(Some(value))
+        ),
+        None => color_capacity(None),
+    };
+    let plain_bar = match capacity {
+        Some(value) => format!("{} {}", capacity_bar(value, false), format_capacity(Some(value))),
+        None => format_capacity(None),
+    };
+    match last_charged {
+        Some(lc) => (
+            format!(
+                "{} {} last charged {}",
+                styled_bar,
+                color_muted("/"),
+                color_capacity(Some(lc))
+            ),
+            format!("{plain_bar} / last charged {lc}%"),
+        ),
+        None => (styled_bar, plain_bar),
     }
 }
 
@@ -649,76 +689,85 @@ fn format_drop_chart(history: &[BatteryHistoryPoint]) -> Vec<String> {
 
     let mut lines = Vec::new();
     lines.push(String::new());
-    lines.push(color_bold("Drain history"));
 
     if history.len() < 2 {
+        lines.push(color_bold("Drain rate history"));
         lines.push(color_muted("needs at least 2 samples"));
         return lines;
     }
 
     let start = history.len().saturating_sub(CHART_WIDTH);
     let points = &history[start..];
-    let max_drop = points
-        .iter()
-        .flat_map(|point| [point.active_drop_percent, point.standby_drop_percent])
-        .max()
-        .unwrap_or(0)
-        .max(1);
+    let sample_count = points.len();
 
-    let active_line = sparkline(
-        points.iter().map(|point| point.active_drop_percent),
-        max_drop,
+    let header = format!(
+        "{} {}",
+        color_bold("Drain rate history"),
+        color_muted(&format!("({sample_count} samples)"))
     );
-    let standby_line = sparkline(
-        points.iter().map(|point| point.standby_drop_percent),
-        max_drop,
-    );
+    lines.push(header);
+
+    let active_rates: Vec<f64> = points.windows(2).map(|w| {
+        let delta = w[1].active_drop_percent.saturating_sub(w[0].active_drop_percent);
+        let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
+        if secs == 0 { 0.0 } else { delta as f64 * 60.0 / secs as f64 }
+    }).collect();
+
+    let standby_rates: Vec<f64> = points.windows(2).map(|w| {
+        let delta = w[1].standby_drop_percent.saturating_sub(w[0].standby_drop_percent);
+        let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
+        if secs == 0 { 0.0 } else { delta as f64 * 60.0 / secs as f64 }
+    }).collect();
+
+    let max_rate = active_rates
+        .iter()
+        .chain(standby_rates.iter())
+        .cloned()
+        .fold(0.01f64, f64::max);
+
+    let active_line = sparkline_f64(&active_rates, max_rate);
+    let standby_line = sparkline_f64(&standby_rates, max_rate);
+
+    let last_active = active_rates.last().copied().unwrap_or(0.0);
+    let last_standby = standby_rates.last().copied().unwrap_or(0.0);
 
     lines.push(display_row(
         "Active",
         format!(
             "{} {}",
             color(&active_line, "33"),
-            color_bold(&format_drop(points.last().unwrap().active_drop_percent))
+            color_drain(Some(last_active))
         ),
-        format!(
-            "{} {}",
-            active_line,
-            format_drop(points.last().unwrap().active_drop_percent)
-        ),
+        format!("{active_line} {:.2}%/min", last_active),
     ));
     lines.push(display_row(
         "Standby",
         format!(
             "{} {}",
             color(&standby_line, "36"),
-            color_bold(&format_drop(points.last().unwrap().standby_drop_percent))
+            color_drain(Some(last_standby))
         ),
-        format!(
-            "{} {}",
-            standby_line,
-            format_drop(points.last().unwrap().standby_drop_percent)
-        ),
+        format!("{standby_line} {:.2}%/min", last_standby),
     ));
     lines.push(display_row(
         "Scale",
-        color_muted(&format!("0% to {max_drop}% battery used")),
-        format!("0% to {max_drop}% battery used"),
+        color_muted(&format!("0.00 to {max_rate:.2}%/min")),
+        format!("0.00 to {max_rate:.2}%/min"),
     ));
     lines
 }
 
-fn sparkline(values: impl Iterator<Item = u64>, max_value: u64) -> String {
+fn sparkline_f64(values: &[f64], max_value: f64) -> String {
     const TICKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-
     values
-        .map(|value| {
-            let index = if max_value == 0 {
+        .iter()
+        .map(|&v| {
+            let index = if max_value <= 0.0 {
                 0
             } else {
-                (value.saturating_mul((TICKS.len() - 1) as u64) + max_value / 2) / max_value
+                ((v / max_value * 7.0).round() as usize).min(7)
             };
-            TICKS[index as usize]
+            TICKS[index]
         })
         .collect()
 }
@@ -758,6 +807,29 @@ fn format_human_time(unix: u64) -> String {
         CStr::from_ptr(buffer.as_ptr())
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+fn format_relative_time(unix: u64, now: u64) -> String {
+    let secs = now.saturating_sub(unix);
+    if secs < 10 {
+        "just now".to_string()
+    } else if secs < 60 {
+        format!("{secs} seconds ago")
+    } else if secs < 3600 {
+        let mins = secs / 60;
+        if mins == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{mins} minutes ago")
+        }
+    } else {
+        let hours = secs / 3600;
+        if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{hours} hours ago")
+        }
     }
 }
 
@@ -886,6 +958,22 @@ fn format_drain(value: Option<f64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn estimated_remaining(battery_capacity: Option<u8>, drain_per_min: Option<f64>) -> Option<String> {
+    let capacity = battery_capacity?;
+    let drain = drain_per_min?;
+    if drain <= 0.0 {
+        return None;
+    }
+    let minutes_remaining = (f64::from(capacity) / drain).round() as u64;
+    let hours = minutes_remaining / 60;
+    let mins = minutes_remaining % 60;
+    if hours > 0 {
+        Some(format!("\u{2248} {hours}h {mins}m"))
+    } else {
+        Some(format!("\u{2248} {mins}m"))
+    }
+}
+
 fn color_bold(value: &str) -> String {
     color(value, "1")
 }
@@ -966,13 +1054,11 @@ mod tests {
 
         let rendered = format_state_lines(&state).join("\n");
 
-        assert!(rendered.contains("Drain history"));
+        assert!(rendered.contains("Drain rate history"));
         assert!(rendered.contains("Active"));
         assert!(rendered.contains("Standby"));
         assert!(rendered.contains("Scale"));
-        assert!(rendered.contains("3% battery used"));
-        assert!(rendered.contains("1% battery used"));
-        assert!(rendered.contains("█"));
+        assert!(rendered.contains("%/min"));
     }
 
     #[test]
@@ -986,7 +1072,7 @@ mod tests {
 
         let rendered = format_state_lines(&state).join("\n");
 
-        assert!(rendered.contains("Drain history"));
+        assert!(rendered.contains("Drain rate history"));
         assert!(rendered.contains("needs at least 2 samples"));
     }
 
