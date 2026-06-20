@@ -192,9 +192,10 @@ impl BatteryState {
 }
 
 fn should_reset_counters(snapshot: &PowerSnapshot) -> bool {
-    snapshot
-        .battery_capacity
-        .is_some_and(|capacity| capacity >= RESET_COUNTERS_AT_CAPACITY)
+    !snapshot.on_battery_only
+        && snapshot
+            .battery_capacity
+            .is_some_and(|capacity| capacity >= RESET_COUNTERS_AT_CAPACITY)
 }
 
 fn trim_history(history: &mut Vec<BatteryHistoryPoint>) {
@@ -718,6 +719,41 @@ mod tests {
         assert_eq!(state.standby_seconds, 120);
         assert_eq!(state.active_drop_percent, 23);
         assert_eq!(state.standby_drop_percent, 2);
+        assert_eq!(state.history.len(), 2);
+    }
+
+    #[test]
+    fn keeps_counting_when_discharging_at_or_above_95_percent() {
+        let previous = BatteryState {
+            counted_seconds: 30,
+            standby_seconds: 0,
+            on_battery_only: true,
+            battery_capacity: Some(97),
+            last_charged_capacity: Some(98),
+            discharge_seconds: 30,
+            active_drop_percent: 1,
+            standby_drop_percent: 0,
+            history: vec![BatteryHistoryPoint {
+                updated_at_unix: 123,
+                active_drop_percent: 1,
+                standby_drop_percent: 0,
+                battery_capacity: Some(97),
+            }],
+            updated_at_unix: 123,
+        };
+        let discharging = PowerSnapshot {
+            supplies: Vec::new(),
+            on_battery_only: true,
+            battery_capacity: Some(96),
+        };
+
+        let state = BatteryState::next(Some(&previous), 90, &discharging, 60, 0);
+
+        assert_eq!(state.counted_seconds, 90);
+        assert_eq!(state.discharge_seconds, 90);
+        assert_eq!(state.last_charged_capacity, Some(98));
+        assert_eq!(state.active_drop_percent, 2);
+        assert_eq!(state.standby_drop_percent, 0);
         assert_eq!(state.history.len(), 2);
     }
 
