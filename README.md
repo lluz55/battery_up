@@ -56,10 +56,17 @@ Depois consulte o total com:
 nix run . -- status
 ```
 
-O status separa o tempo ativo em bateria do tempo suspenso em bateria. Quando
-houver dados suficientes, ele também mostra o drain rate em standby. No JSON,
-esses dados aparecem como `standby_seconds`, `standby_hms`,
-`standby_drop_percent` e `standby_drain_per_minute`.
+O status separa o tempo ativo em bateria do tempo suspenso em bateria. Quando o
+kernel expõe energia e potência da bateria, ele também mostra consumo médio e
+previsão de autonomia baseada em `energy_now - energy_empty` dividido por uma
+média móvel recente de `power_now`. Se esses campos não existirem, a previsão
+cai para a estimativa antiga por queda percentual.
+
+No JSON, os dados de standby aparecem como `standby_seconds`, `standby_hms`,
+`standby_drop_percent` e `standby_drain_per_minute`. A previsão de autonomia
+aparece como `power_now_watts`, `short_average_power_watts`,
+`long_average_power_watts`, `energy_remaining_watt_hours`,
+`estimated_remaining_seconds` e `estimated_remaining_hms`.
 
 Para acompanhar o estado do daemon ao vivo no terminal:
 

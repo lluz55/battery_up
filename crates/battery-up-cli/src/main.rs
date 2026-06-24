@@ -455,13 +455,19 @@ fn write_status_block(
 
 fn format_state_json(state: &BatteryState) -> String {
     format!(
-        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"standby_seconds\":{},\"standby_hms\":\"{}\",\"active_drop_percent\":{},\"standby_drop_percent\":{},\"standby_drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"total_battery_seconds\":{},\"total_battery_hms\":\"{}\",\"updated_at_unix\":{},\"history\":[{}]}}",
+        "{{\"state\":\"{}\",\"on_battery_only\":{},\"battery_capacity\":{},\"last_charged_capacity\":{},\"discharge_seconds\":{},\"drain_per_minute\":{},\"power_now_watts\":{},\"short_average_power_watts\":{},\"long_average_power_watts\":{},\"energy_remaining_watt_hours\":{},\"estimated_remaining_seconds\":{},\"estimated_remaining_hms\":{},\"standby_seconds\":{},\"standby_hms\":\"{}\",\"active_drop_percent\":{},\"standby_drop_percent\":{},\"standby_drain_per_minute\":{},\"counted_seconds\":{},\"counted_hms\":\"{}\",\"total_battery_seconds\":{},\"total_battery_hms\":\"{}\",\"updated_at_unix\":{},\"history\":[{}]}}",
         state.state_label(),
         state.on_battery_only,
         json_option_u8(state.battery_capacity),
         json_option_u8(state.last_charged_capacity),
         state.discharge_seconds,
         json_option_f64(drain_per_minute(state)),
+        json_option_f64(microwatts_to_watts(state.power_now_microwatts)),
+        json_option_f64(microwatts_to_watts(state.short_average_power_microwatts)),
+        json_option_f64(microwatts_to_watts(state.long_average_power_microwatts)),
+        json_option_f64(energy_remaining_watt_hours(state)),
+        json_option_u64(estimated_remaining_seconds_from_power(state)),
+        json_option_string(estimated_remaining_seconds_from_power(state).map(format_duration)),
         state.standby_seconds,
         format_duration(state.standby_seconds),
         state.active_drop_percent,
@@ -512,7 +518,15 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
         display_row("Drain rate", color_drain(drain), format_drain(drain)),
     ];
 
-    if let Some(remaining) = estimated_remaining(state.battery_capacity, drain) {
+    if let Some(power_draw) = format_power_draw(state) {
+        rows.push(display_row(
+            "Power draw",
+            color_power_draw(state, &power_draw),
+            power_draw,
+        ));
+    }
+
+    if let Some(remaining) = estimated_remaining(state) {
         rows.push(display_row(
             "Est. remaining",
             color_bold(&remaining),
@@ -535,11 +549,7 @@ fn format_state_lines(state: &BatteryState) -> Vec<String> {
         color_drain(standby_drain),
         format_drain(standby_drain),
     ));
-    rows.push(display_row(
-        "Updated",
-        color_muted(&updated_at),
-        updated_at,
-    ));
+    rows.push(display_row("Updated", color_muted(&updated_at), updated_at));
 
     let mut lines = section_lines("battery-up \u{00b7} status", &rows);
     lines.extend(format_drop_chart(&state.history));
@@ -624,7 +634,11 @@ fn capacity_meter_with_last_charged(
         None => color_capacity(None),
     };
     let plain_bar = match capacity {
-        Some(value) => format!("{} {}", capacity_bar(value, false), format_capacity(Some(value))),
+        Some(value) => format!(
+            "{} {}",
+            capacity_bar(value, false),
+            format_capacity(Some(value))
+        ),
         None => format_capacity(None),
     };
     match last_charged {
@@ -680,6 +694,71 @@ fn standby_drain_per_minute(state: &BatteryState) -> Option<f64> {
     Some((state.standby_drop_percent as f64 * 60.0) / state.standby_seconds as f64)
 }
 
+fn estimated_remaining(state: &BatteryState) -> Option<String> {
+    estimated_remaining_seconds_from_power(state)
+        .map(format_estimated_remaining_seconds)
+        .or_else(|| {
+            estimated_remaining_from_percent(state.battery_capacity, drain_per_minute(state))
+        })
+}
+
+fn estimated_remaining_seconds_from_power(state: &BatteryState) -> Option<u64> {
+    if !state.on_battery_only {
+        return None;
+    }
+
+    let energy_remaining = state
+        .energy_now_microwatt_hours?
+        .saturating_sub(state.energy_empty_microwatt_hours.unwrap_or(0));
+    let estimate_power = estimate_power_microwatts(state)?;
+    if energy_remaining == 0 || estimate_power == 0 {
+        return None;
+    }
+
+    let seconds = u128::from(energy_remaining) * 3600 / u128::from(estimate_power);
+    Some(seconds.min(u128::from(u64::MAX)) as u64)
+}
+
+fn estimate_power_microwatts(state: &BatteryState) -> Option<u64> {
+    state
+        .short_average_power_microwatts
+        .zip(state.long_average_power_microwatts)
+        .map(|(short, long)| short.max(long))
+        .or(state.short_average_power_microwatts)
+        .or(state.long_average_power_microwatts)
+        .or(state.power_now_microwatts)
+}
+
+fn energy_remaining_watt_hours(state: &BatteryState) -> Option<f64> {
+    let remaining = state
+        .energy_now_microwatt_hours?
+        .saturating_sub(state.energy_empty_microwatt_hours.unwrap_or(0));
+    Some(remaining as f64 / 1_000_000.0)
+}
+
+fn microwatts_to_watts(value: Option<u64>) -> Option<f64> {
+    value.map(|value| value as f64 / 1_000_000.0)
+}
+
+fn format_power_draw(state: &BatteryState) -> Option<String> {
+    let estimate = microwatts_to_watts(estimate_power_microwatts(state))?;
+    match microwatts_to_watts(state.power_now_microwatts) {
+        Some(now) if (now - estimate).abs() >= 0.05 => {
+            Some(format!("{estimate:.2} W avg / {now:.2} W now"))
+        }
+        _ => Some(format!("{estimate:.2} W avg")),
+    }
+}
+
+fn color_power_draw(state: &BatteryState, formatted: &str) -> String {
+    match microwatts_to_watts(estimate_power_microwatts(state)) {
+        Some(value) if value <= 8.0 => color(formatted, "32"),
+        Some(value) if value <= 18.0 => color(formatted, "33"),
+        Some(_) => color(formatted, "31"),
+        None => color(formatted, "90"),
+    }
+}
+
 fn total_battery_seconds(state: &BatteryState) -> u64 {
     state.counted_seconds.saturating_add(state.standby_seconds)
 }
@@ -707,17 +786,35 @@ fn format_drop_chart(history: &[BatteryHistoryPoint]) -> Vec<String> {
     );
     lines.push(header);
 
-    let active_rates: Vec<f64> = points.windows(2).map(|w| {
-        let delta = w[1].active_drop_percent.saturating_sub(w[0].active_drop_percent);
-        let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
-        if secs == 0 { 0.0 } else { delta as f64 * 60.0 / secs as f64 }
-    }).collect();
+    let active_rates: Vec<f64> = points
+        .windows(2)
+        .map(|w| {
+            let delta = w[1]
+                .active_drop_percent
+                .saturating_sub(w[0].active_drop_percent);
+            let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
+            if secs == 0 {
+                0.0
+            } else {
+                delta as f64 * 60.0 / secs as f64
+            }
+        })
+        .collect();
 
-    let standby_rates: Vec<f64> = points.windows(2).map(|w| {
-        let delta = w[1].standby_drop_percent.saturating_sub(w[0].standby_drop_percent);
-        let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
-        if secs == 0 { 0.0 } else { delta as f64 * 60.0 / secs as f64 }
-    }).collect();
+    let standby_rates: Vec<f64> = points
+        .windows(2)
+        .map(|w| {
+            let delta = w[1]
+                .standby_drop_percent
+                .saturating_sub(w[0].standby_drop_percent);
+            let secs = w[1].updated_at_unix.saturating_sub(w[0].updated_at_unix);
+            if secs == 0 {
+                0.0
+            } else {
+                delta as f64 * 60.0 / secs as f64
+            }
+        })
+        .collect();
 
     let max_rate = active_rates
         .iter()
@@ -958,19 +1055,29 @@ fn format_drain(value: Option<f64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn estimated_remaining(battery_capacity: Option<u8>, drain_per_min: Option<f64>) -> Option<String> {
+fn estimated_remaining_from_percent(
+    battery_capacity: Option<u8>,
+    drain_per_min: Option<f64>,
+) -> Option<String> {
     let capacity = battery_capacity?;
     let drain = drain_per_min?;
     if drain <= 0.0 {
         return None;
     }
     let minutes_remaining = (f64::from(capacity) / drain).round() as u64;
+    Some(format_estimated_remaining_seconds(
+        minutes_remaining.saturating_mul(60),
+    ))
+}
+
+fn format_estimated_remaining_seconds(seconds: u64) -> String {
+    let minutes_remaining = (seconds.saturating_add(30)) / 60;
     let hours = minutes_remaining / 60;
     let mins = minutes_remaining % 60;
     if hours > 0 {
-        Some(format!("\u{2248} {hours}h {mins}m"))
+        format!("\u{2248} {hours}h {mins}m")
     } else {
-        Some(format!("\u{2248} {mins}m"))
+        format!("\u{2248} {mins}m")
     }
 }
 
@@ -991,6 +1098,18 @@ fn json_option_u8(value: Option<u8>) -> String {
 fn json_option_f64(value: Option<f64>) -> String {
     value
         .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn json_option_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn json_option_string(value: Option<String>) -> String {
+    value
+        .map(|value| format!("\"{value}\""))
         .unwrap_or_else(|| "null".to_string())
 }
 
@@ -1030,6 +1149,11 @@ mod tests {
                 .last()
                 .map(|point| point.standby_drop_percent)
                 .unwrap_or(0),
+            energy_now_microwatt_hours: Some(43_500_000),
+            energy_empty_microwatt_hours: Some(0),
+            power_now_microwatts: Some(12_000_000),
+            short_average_power_microwatts: Some(10_000_000),
+            long_average_power_microwatts: Some(9_000_000),
             history,
             updated_at_unix: 123,
         }
